@@ -21,17 +21,22 @@ def load_model():
     print("Loading base model...")
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
-        device_map="auto",
-        dtype=torch.float32
+        device_map="cpu",
+        dtype=torch.float32,
+        low_cpu_mem_usage=True
     )
 
     print("Loading LoRA adapter...")
-    model = PeftModel.from_pretrained(base_model, MODEL_DIR)
+    model = PeftModel.from_pretrained(
+        base_model, 
+        MODEL_DIR,
+        is_trainable=False
+    )
+    model = model.merge_and_unload()  # ← fixes the KeyError
     model.eval()
 
     print("Model ready!")
     return model, tokenizer
-
 def ask_model(context: str, question: str, max_new_tokens: int = 150) -> str:
     m, tok = load_model()
 

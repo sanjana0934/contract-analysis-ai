@@ -4,3 +4,12 @@ backend/**/__pycache__/
 *.pyc
 .env
 backend/.env
+
+# Large model files
+*.safetensors
+*.bin
+tinyllama_lora_v2/
+tinyllama_lora_v2_final/
+__pycache__/
+.Python
+serviceAccountKey.json

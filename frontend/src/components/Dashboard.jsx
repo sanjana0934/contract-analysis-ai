@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { db } from "../firebase";
+import { collection, addDoc, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import axios from "axios";
 
 const QUICK = [
@@ -10,7 +12,7 @@ const QUICK = [
   "Are there any penalty clauses?",
 ];
 
-export default function Dashboard({ contractInfo, onReset }) {
+export default function Dashboard({ contractInfo, user, onReset }) {
   const [tab, setTab] = useState("ask");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState(null);
@@ -20,36 +22,95 @@ export default function Dashboard({ contractInfo, onReset }) {
   const [clauses, setClauses] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  const getToken = async () => {
+    if (!user) return null;
+    return await user.getIdToken();
+  };
+
   const askQuestion = async () => {
     if (!question.trim()) return;
     setLoading(true); setAnswer(null); setSources([]);
     try {
-      const fd = new FormData(); fd.append("question", question);
-      const res = await axios.post("http://localhost:8000/ask", fd);
+      const token = await getToken();
+      const fd = new FormData();
+      fd.append("question", question);
+      const res = await axios.post("http://localhost:8000/ask", fd, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       setAnswer(res.data.answer);
       setSources(res.data.source_chunks || []);
+
+      // Save Q&A to Firestore
+      if (contractInfo?.contract_id && user) {
+        await addDoc(
+          collection(db, "contracts", contractInfo.contract_id, "conversations"),
+          { question, answer: res.data.answer, timestamp: serverTimestamp() }
+        );
+      }
     } catch { setAnswer("Error getting answer. Please try again."); }
     finally { setLoading(false); }
   };
 
   const getSummary = async () => {
     setLoading(true); setSummary(null);
-    try { const res = await axios.post("http://localhost:8000/summary"); setSummary(res.data.summary); }
-    catch { setSummary("Error generating summary."); }
+    try {
+      const token = await getToken();
+      const fd = new FormData();
+      if (contractInfo?.contract_id) fd.append("contract_id", contractInfo.contract_id);
+      const res = await axios.post("http://localhost:8000/summary", fd, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      setSummary(res.data.summary);
+
+      // Save to Firestore
+      if (contractInfo?.contract_id && user) {
+        await updateDoc(doc(db, "contracts", contractInfo.contract_id), {
+          summary: res.data.summary
+        });
+      }
+    } catch { setSummary("Error generating summary."); }
     finally { setLoading(false); }
   };
 
   const getRisks = async () => {
     setLoading(true); setRisks(null);
-    try { const res = await axios.post("http://localhost:8000/risks"); setRisks(res.data.risks); }
-    catch { setRisks("Error identifying risks."); }
+    try {
+      const token = await getToken();
+      const fd = new FormData();
+      if (contractInfo?.contract_id) fd.append("contract_id", contractInfo.contract_id);
+      const res = await axios.post("http://localhost:8000/risks", fd, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      setRisks(res.data.risks);
+
+      // Save to Firestore
+      if (contractInfo?.contract_id && user) {
+        await updateDoc(doc(db, "contracts", contractInfo.contract_id), {
+          risks: res.data.risks
+        });
+      }
+    } catch { setRisks("Error identifying risks."); }
     finally { setLoading(false); }
   };
 
   const getClauses = async () => {
     setLoading(true); setClauses(null);
-    try { const res = await axios.post("http://localhost:8000/clauses"); setClauses(res.data.clauses); }
-    catch { setClauses(null); }
+    try {
+      const token = await getToken();
+      const fd = new FormData();
+      if (contractInfo?.contract_id) fd.append("contract_id", contractInfo.contract_id);
+      const res = await axios.post("http://localhost:8000/clauses", fd, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      setClauses(res.data.clauses);
+
+      // Save to Firestore
+      if (contractInfo?.contract_id && user) {
+        await updateDoc(doc(db, "contracts", contractInfo.contract_id), {
+          clauses: res.data.clauses
+        });
+      }
+    } catch { setClauses(null); }
     finally { setLoading(false); }
   };
 
@@ -62,31 +123,23 @@ export default function Dashboard({ contractInfo, onReset }) {
 
   return (
     <>
-      {/* Topbar */}
-      <div className="topbar">
-        <div className="brand">
-          <div className="brand-mark">⚖</div>
-          <span className="brand-name">ContractAI</span>
-        </div>
-        <div className="topbar-center">
-          <div className="file-dot" />
-          <span className="file-name">{contractInfo?.filename}</span>
-          <span className="file-meta">· {contractInfo?.total_chunks} sections · {contractInfo?.total_words?.toLocaleString()} words</span>
-        </div>
-        <button className="btn-outline" onClick={onReset}>Upload new</button>
-      </div>
-
-      {/* Body */}
       <div className="layout">
         {/* Sidebar */}
         <div className="sidebar">
           <div className="sidebar-label">Analysis</div>
           {nav.map(n => (
-            <div key={n.id} className={`nav-item ${tab === n.id ? "active" : ""}`} onClick={() => setTab(n.id)}>
+            <div key={n.id} className={`nav-item ${tab === n.id ? "active" : ""}`}
+              onClick={() => setTab(n.id)}>
               <span className="nav-icon">{n.icon}</span>
               {n.label}
             </div>
           ))}
+
+          <div className="sidebar-label" style={{ marginTop: "auto" }}>Contract</div>
+          <div className="nav-item" onClick={onReset}>
+            <span className="nav-icon">⬆️</span>
+            Upload new
+          </div>
         </div>
 
         {/* Main */}
@@ -104,7 +157,9 @@ export default function Dashboard({ contractInfo, onReset }) {
             </div>
             <div className="stat">
               <div className="stat-label">Status</div>
-              <div className="stat-value" style={{ color: "var(--green)", fontSize: 14, paddingTop: 3 }}>Ready</div>
+              <div className="stat-value" style={{ color: "var(--green)", fontSize: 14, paddingTop: 3 }}>
+                ● Ready
+              </div>
             </div>
           </div>
 
@@ -122,9 +177,8 @@ export default function Dashboard({ contractInfo, onReset }) {
                   onChange={e => setQuestion(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && askQuestion()}
                 />
-                <button className="btn-primary" onClick={askQuestion} disabled={loading || !question.trim()}>
-                  Ask
-                </button>
+                <button className="btn-primary" onClick={askQuestion}
+                  disabled={loading || !question.trim()}>Ask</button>
               </div>
               <div className="chips">
                 {QUICK.map(q => (
